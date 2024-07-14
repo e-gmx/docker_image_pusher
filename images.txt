@@ -1,1 +1,1 @@
-dreamacro/clash
+dreamacro/clash:latest
