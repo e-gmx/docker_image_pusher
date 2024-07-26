@@ -1,2 +1,2 @@
-dreamacro/clash:latest
+docker pull dreamacro/clash
 
