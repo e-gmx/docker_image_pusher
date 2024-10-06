@@ -1,2 +1,2 @@
-mritd/tpclash:latest
-
+portainer/portainer-ce
+mysql
