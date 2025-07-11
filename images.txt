@@ -1,1 +1,1 @@
-emqx/mqttx-web
+python:3.10-slim
