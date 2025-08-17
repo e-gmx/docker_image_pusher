@@ -1,1 +1,1 @@
-emqx/emqx-enterprise:5.10.0
+paddlepaddle/paddle-lite:2.0.0_beta
