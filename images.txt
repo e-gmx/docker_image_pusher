@@ -1,1 +1,1 @@
-paddlepaddle/paddle-lite:2.0.0_beta
+mysql:latest
