@@ -1,1 +1,1 @@
-mysql:latest
+eclipse-mosquitto:latest
