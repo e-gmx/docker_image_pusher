@@ -1,1 +1,1 @@
-wordpress:php8.4
+gitlab/gitlab-ee:18.3.3-ee.0
