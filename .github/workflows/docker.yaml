@@ -10,6 +10,13 @@ env:
   ALIYUN_NAME_SPACE: "${{ secrets.ALIYUN_NAME_SPACE }}"
   ALIYUN_REGISTRY_USER: "${{ secrets.ALIYUN_REGISTRY_USER }}"
   ALIYUN_REGISTRY_PASSWORD: "${{ secrets.ALIYUN_REGISTRY_PASSWORD }}"
+  # 可选：配置这两个可显著降低 Docker Hub 限速
+  DOCKERHUB_USERNAME: "${{ secrets.DOCKERHUB_USERNAME }}"
+  DOCKERHUB_TOKEN: "${{ secrets.DOCKERHUB_TOKEN }}"
+  # 可选：如果 ACR 是自签证书或内网，设为 "false"
+  DEST_TLS_VERIFY: "true"
+  # 可选：需要把 OCI 转成 Docker schema2 时用：v2s2（否则留空）
+  SKOPEO_FORMAT: ""
 
 jobs:
   mirror:
@@ -19,25 +26,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Install skopeo (and jq for inspect)
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y skopeo jq
 
-      - name: Login to Aliyun ACR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.ALIYUN_REGISTRY }}
-          username: ${{ env.ALIYUN_REGISTRY_USER }}
-          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
-
-      # images.txt 每行一个源镜像，可写完整或简写（简写默认 docker.io/library/）
+      # images.txt 每行一个源镜像：支持完整或简写（简写默认 docker.io/library/）
       # 例如：
       # docker.io/library/mysql:latest
       # nginx:1.25.3
       # bitnami/mysql:8.0
-      - name: Mirror multi-arch manifests to ACR
+      # 也支持 @sha256:<digest> 源引用（目的地会用 sha-<前12位> 作为 tag）
+      - name: Mirror multi-arch images with skopeo
         shell: bash
         run: |
           set -euo pipefail
+
+          : "${ALIYUN_REGISTRY:?missing}"
+          : "${ALIYUN_NAME_SPACE:?missing}"
+          : "${ALIYUN_REGISTRY_USER:?missing}"
+          : "${ALIYUN_REGISTRY_PASSWORD:?missing}"
 
           if [[ ! -f images.txt ]]; then
             echo "images.txt not found at repo root."
@@ -49,30 +58,62 @@ jobs:
             [[ -z "${SRC// }" ]] && continue
             [[ "$SRC" =~ ^[[:space:]]*# ]] && continue
 
-            # 规范化源：无斜杠时，默认 docker.io/library/<name:tag>
+            # 无斜杠时默认 docker.io/library/<name:tag>
             if [[ "$SRC" != */* ]]; then
               SRC_FULL="docker.io/library/$SRC"
             else
               SRC_FULL="$SRC"
             fi
 
-            # 取最后一段作为 <repo>:<tag>
-            NAME_TAG="${SRC_FULL##*/}"      # e.g. mysql:latest
-            REPO="${NAME_TAG%%:*}"          # e.g. mysql
-            TAG="${NAME_TAG#*:}"            # e.g. latest
+            # 取最后一段作为 <repo> + (<tag> 或 <@digest>)
+            NAME_REF="${SRC_FULL##*/}"
 
-            # 目标：<REGISTRY>/<NAMESPACE>/<repo>:<tag>
-            DEST="${ALIYUN_REGISTRY}/${ALIYUN_NAME_SPACE}/${REPO}:${TAG}"
+            if [[ "$NAME_REF" == *"@"* ]]; then
+              # 源是 digest：<repo>@sha256:abcdef...
+              REPO="${NAME_REF%%@*}"
+              DIGEST="${NAME_REF#*@}"           # sha256:abcdef...
+              SHORT="${DIGEST#*:}"              # abcdef...
+              SHORT="${SHORT:0:12}"
+              DEST_TAG="sha-${SHORT}"           # 目的地不能用 @digest，生成一个稳定 tag
+            else
+              # 源是 tag：<repo>:<tag>
+              REPO="${NAME_REF%%:*}"
+              DEST_TAG="${NAME_REF#*:}"
+            fi
+
+            DEST="${ALIYUN_REGISTRY}/${ALIYUN_NAME_SPACE}/${REPO}:${DEST_TAG}"
 
             echo "============================================================"
             echo "Mirroring: ${SRC_FULL}  -->  ${DEST}"
             echo "============================================================"
 
-            # 核心：将上游 multi-arch manifest 直接创建到 ACR 目标 tag
-            docker buildx imagetools create \
-              --tag "${DEST}" \
-              "${SRC_FULL}"
+            # 组装 skopeo 参数
+            FLAGS=(--all --retry-times 5 --dest-creds "${ALIYUN_REGISTRY_USER}:${ALIYUN_REGISTRY_PASSWORD}")
+            # Docker Hub 源凭证（可选）
+            if [[ -n "${DOCKERHUB_USERNAME:-}" && -n "${DOCKERHUB_TOKEN:-}" ]]; then
+              FLAGS+=(--src-creds "${DOCKERHUB_USERNAME}:${DOCKERHUB_TOKEN}")
+            fi
+            # 自签/TLS 校验
+            if [[ "${DEST_TLS_VERIFY:-true}" == "false" ]]; then
+              FLAGS+=(--dest-tls-verify=false)
+            fi
+            # 媒体类型转换（可选）
+            if [[ -n "${SKOPEO_FORMAT:-}" ]]; then
+              FLAGS+=(--format "${SKOPEO_FORMAT}")
+            fi
+
+            # 执行复制（多架构 manifest 一次性带过去）
+            skopeo copy "${FLAGS[@]}" \
+              "docker://${SRC_FULL}" \
+              "docker://${DEST}"
 
             echo "Verify platforms for ${DEST}:"
-            docker buildx imagetools inspect "${DEST}" || true
+            skopeo inspect --raw "docker://${DEST}" | jq '
+              if has("manifests") then
+                .manifests | map(.platform)
+              else
+                .
+              end
+            ' || true
+
           done < images.txt
