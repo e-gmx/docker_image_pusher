@@ -1,1 +1,1 @@
-redis:alpine
+tdengine/tsdb-ee:latest
