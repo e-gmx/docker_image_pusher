@@ -1,1 +1,1 @@
-xjxjin/alist-sync:latest
+portainer/portainer-ce:latest
