@@ -1,1 +1,1 @@
-weejewel/wg-easy:latest
+yaming116/fun-asr:latest
