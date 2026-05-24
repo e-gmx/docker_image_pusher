@@ -1,1 +1,1 @@
-yaming116/fun-asr:latest
+ghcr.io/esphome/esphome
