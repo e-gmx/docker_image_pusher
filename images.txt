@@ -1,1 +1,1 @@
-ghcr.io/esphome/esphome:latest
+ghcr.io/esphome/esphome
